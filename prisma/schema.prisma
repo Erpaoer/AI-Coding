@@ -1,0 +1,111 @@
+// Mini Mall 数据库模型
+// 6 张表：User, Category, Product, CartItem, Order, OrderItem
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── 用户 ───
+model User {
+  id             Int        @id @default(autoincrement())
+  email          String     @unique
+  password       String                      // bcryptjs 哈希
+  name           String
+  role           String     @default("USER") // "USER" | "ADMIN"
+  totalSpent     Float      @default(0)      // 累计消费金额（用于心悦等级计算）
+  membershipLevel Int       @default(0)     // 心悦等级：0=普通 1=心悦1级 2=心悦2级 3=心悦3级
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  cartItems CartItem[]
+  orders    Order[]
+
+  @@index([email])
+}
+
+// ─── 分类 ───
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  slug      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products  Product[]
+}
+
+// ─── 商品 ───
+model Product {
+  id          Int         @id @default(autoincrement())
+  name        String
+  slug        String      @unique
+  description String
+  price       Float
+  imageUrl    String?                   // 相对路径 "/uploads/products/xxx.webp"
+  stock       Int         @default(0)
+  categoryId  Int
+  isActive    Boolean     @default(true) // true=上架 false=下架
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  category    Category    @relation(fields: [categoryId], references: [id])
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
+
+  @@index([categoryId])
+  @@index([slug])
+  @@index([name])
+}
+
+// ─── 购物车明细 ───
+model CartItem {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  productId Int
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])       // 同用户同商品只存一行，加购时 quantity 累加
+  @@index([userId])
+}
+
+// ─── 订单 ───
+model Order {
+  id            Int         @id @default(autoincrement())
+  userId        Int
+  status        String      @default("PENDING") // PENDING|PROCESSING|SHIPPED|DELIVERED|CANCELLED
+  originalTotal Float                      // 折前总价（商品原价 × 数量）
+  discount      Float       @default(1.0)  // 折扣率：1.0=无折扣 0.98=9.8折 0.95=9.5折 0.9=9折
+  total         Float                      // 折后实付金额 = originalTotal × discount
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  user      User        @relation(fields: [userId], references: [id])
+  items     OrderItem[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ─── 订单明细 ───
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  orderId   Int
+  productId Int
+  quantity  Int
+  price     Float                     // 下单时商品价格快照，后续调价不影响历史订单
+
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+}

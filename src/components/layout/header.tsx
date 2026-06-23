@@ -1,13 +1,25 @@
 "use client";
 
 // 顶栏 —— Logo + 导航 + 搜索入口 + 购物车徽标 + 用户菜单
-// Phase 2 完善：登录状态切换显示
+// 接收服务端传入的 user 对象，根据登录状态切换显示
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { LogoutButton } from "@/components/auth/logout-button";
 
-export function Header() {
+interface HeaderUser {
+  sub: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+interface HeaderProps {
+  user: HeaderUser | null;
+}
+
+export function Header({ user }: HeaderProps) {
   const pathname = usePathname();
 
   // 后台页面不显示前台 Header
@@ -34,37 +46,60 @@ export function Header() {
           >
             首页
           </Link>
-          <Link
-            href="/search"
-            className={cn(
-              "hover:text-primary transition-colors",
-              isActive("/search") && "text-primary font-medium"
-            )}
-          >
-            搜索
-          </Link>
+          {user?.role === "ADMIN" && (
+            <Link
+              href="/admin"
+              className={cn(
+                "hover:text-primary transition-colors",
+                isActive("/admin") && "text-primary font-medium"
+              )}
+            >
+              后台管理
+            </Link>
+          )}
         </nav>
 
         {/* 右侧操作 */}
         <div className="flex items-center gap-3">
+          {/* 购物车 */}
           <Link
             href="/cart"
             className="relative text-sm hover:text-primary transition-colors"
           >
             🛒 购物车
           </Link>
-          <Link
-            href="/login"
-            className="text-sm border border-border px-3 py-1.5 rounded-md hover:bg-muted-background transition-colors"
-          >
-            登录
-          </Link>
-          <Link
-            href="/register"
-            className="text-sm bg-primary text-white px-3 py-1.5 rounded-md hover:bg-primary-dark transition-colors"
-          >
-            注册
-          </Link>
+
+          {user ? (
+            /* 已登录：用户名 + 退出按钮 */
+            <>
+              <Link
+                href="/orders"
+                className="text-sm hover:text-primary transition-colors"
+              >
+                📋 我的订单
+              </Link>
+              <span className="text-sm text-muted hidden sm:inline">
+                {user.name}
+              </span>
+              <LogoutButton />
+            </>
+          ) : (
+            /* 未登录：登录 + 注册链接 */
+            <>
+              <Link
+                href="/login"
+                className="text-sm border border-border px-3 py-1.5 rounded-md hover:bg-muted-background transition-colors"
+              >
+                登录
+              </Link>
+              <Link
+                href="/register"
+                className="text-sm bg-primary text-white px-3 py-1.5 rounded-md hover:bg-primary-dark transition-colors"
+              >
+                注册
+              </Link>
+            </>
+          )}
         </div>
       </div>
     </header>

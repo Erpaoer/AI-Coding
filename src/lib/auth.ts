@@ -6,12 +6,17 @@ import bcrypt from "bcryptjs";
 
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET!);
 
-/** 签发 JWT，有效期 24 小时 */
-export async function signJWT(payload: {
-  sub: string; // 用户 ID
+/** JWT payload 类型（兼容 jose 的 JWTPayload index signature） */
+export interface JwtPayload {
+  sub: string;   // 用户 ID
   email: string;
+  name: string;  // 用户姓名，Header 直接展示无需查 DB
   role: string;
-}) {
+  [key: string]: unknown;
+}
+
+/** 签发 JWT，有效期 24 小时 */
+export async function signJWT(payload: JwtPayload) {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime("24h")
@@ -19,14 +24,14 @@ export async function signJWT(payload: {
 }
 
 /** 校验 JWT，返回 payload 或抛出异常 */
-export async function verifyJWT(token: string) {
+export async function verifyJWT(token: string): Promise<JwtPayload> {
   const { payload } = await jwtVerify(token, SECRET);
-  return payload as { sub: string; email: string; role: string };
+  return payload as unknown as JwtPayload;
 }
 
 /** 从 cookie 中获取当前登录用户，未登录返回 null */
 // Next.js 16: cookies() 必须 await
-export async function getCurrentUser() {
+export async function getCurrentUser(): Promise<JwtPayload | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("token")?.value;
   if (!token) return null;

@@ -14,7 +14,7 @@ export const registerSchema = z
   .object({
     name: z.string().min(1, "请输入姓名"),
     email: z.string().email("请输入有效的邮箱地址"),
-    password: z.string().min(6, "密码至少 6 位"),
+    password: z.string().min(8, "密码至少 8 位"),
     confirmPassword: z.string(),
   })
   .refine((d) => d.password === d.confirmPassword, {

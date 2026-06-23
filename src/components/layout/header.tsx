@@ -7,6 +7,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { CartBadge } from "@/components/cart/cart-badge";
 
 interface HeaderUser {
   sub: string;
@@ -67,6 +68,7 @@ export function Header({ user }: HeaderProps) {
             className="relative text-sm hover:text-primary transition-colors"
           >
             🛒 购物车
+            <CartBadge />
           </Link>
 
           {user ? (

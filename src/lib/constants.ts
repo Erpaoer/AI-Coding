@@ -3,22 +3,32 @@
 export const ROLES = ["USER", "ADMIN"] as const;
 export type Role = (typeof ROLES)[number];
 
+// 订单状态流转：PENDING → PAID → SHIPPED → COMPLETED（任意状态可取消）
 export const ORDER_STATUSES = [
   "PENDING",
-  "PROCESSING",
+  "PAID",
   "SHIPPED",
-  "DELIVERED",
+  "COMPLETED",
   "CANCELLED",
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 // 订单状态的中文映射
 export const ORDER_STATUS_LABELS: Record<string, string> = {
-  PENDING: "待处理",
-  PROCESSING: "处理中",
+  PENDING: "待付款",
+  PAID: "已支付",
   SHIPPED: "已发货",
-  DELIVERED: "已送达",
+  COMPLETED: "已完成",
   CANCELLED: "已取消",
+};
+
+// 状态流转允许表（用于前端按钮判断和后端校验）
+export const ORDER_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["PAID", "CANCELLED"],
+  PAID: ["SHIPPED", "CANCELLED"],
+  SHIPPED: ["COMPLETED", "CANCELLED"],
+  COMPLETED: ["CANCELLED"],
+  CANCELLED: [], // 已取消不可再变更
 };
 
 // ─── 心悦会员等级 ───

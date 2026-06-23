@@ -39,6 +39,19 @@ export const categorySchema = z.object({
   name: z.string().min(1, "请输入分类名称").max(50, "名称不能超过 50 字"),
 });
 
+// ─── 购物车加入/更新数量 ───
+
+/** 加入购物车：需要 productId + quantity */
+export const cartItemSchema = z.object({
+  productId: z.coerce.number().int("无效的商品 ID").positive(),
+  quantity: z.coerce.number().int("数量必须为整数").min(1, "数量至少为 1"),
+});
+
+/** 修改购物车数量：只需要 quantity（id 从 URL params 提取） */
+export const updateCartItemSchema = z.object({
+  quantity: cartItemSchema.shape.quantity,
+});
+
 // ─── 订单状态更新 ───
 export const orderStatusSchema = z.object({
   status: z.enum(ORDER_STATUSES, { message: "无效的订单状态" }),

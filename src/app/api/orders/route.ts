@@ -8,6 +8,13 @@ import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
 import { getMembershipLevel, getDiscountByLevel } from "@/lib/constants";
 
+/** 事务内库存不足异常 */
+class StockExhaustedError extends Error {
+  constructor(public readonly productName: string) {
+    super(`库存已被抢光: ${productName}`);
+  }
+}
+
 // ─── GET 订单列表 ───
 export async function GET(req: NextRequest) {
   const auth = await requireAuth();
@@ -80,17 +87,19 @@ export async function POST() {
       return NextResponse.json({ error: "购物车中没有可购买的商品" }, { status: 400 });
     }
 
-    // 3. 逐项检查库存（给出具体缺货商品）
+    // 3. 逐项检查库存
     const outOfStock: string[] = [];
     for (const item of activeItems) {
       if (item.quantity > item.product.stock) {
-        outOfStock.push(
-          `「${item.product.name}」库存不足（需要 ${item.quantity} 件，当前库存 ${item.product.stock} 件）`
-        );
+        outOfStock.push(item.product.name);
       }
     }
     if (outOfStock.length > 0) {
-      return NextResponse.json({ error: outOfStock.join("；") }, { status: 400 });
+      console.warn("库存不足，商品:", outOfStock.join("、"));
+      return NextResponse.json(
+        { error: "部分商品库存不足，请调整数量后重试" },
+        { status: 400 }
+      );
     }
 
     // 4. 计算金额
@@ -99,26 +108,25 @@ export async function POST() {
       0
     );
 
-    // 5. 获取用户当前会员等级 → 折扣
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { totalSpent: true, membershipLevel: true },
-    });
-
-    // 防御：认证用户理论上一定存在，但极端情况下可能被删除
-    if (!user) {
-      return NextResponse.json({ error: "用户不存在" }, { status: 500 });
-    }
-
-    const currentTotalSpent = user.totalSpent;
-    const level = getMembershipLevel(currentTotalSpent);
-    const discount = getDiscountByLevel(level);
-
-    // 折后金额（保留 2 位小数）
-    const total = Math.round(originalTotal * discount * 100) / 100;
-
-    // 6. 事务：创建订单 + 扣库存(含验证) + 清购物车 + 更新用户消费
+    // 5. 事务：创建订单 + 扣库存(含验证) + 清购物车 + 更新用户消费
+    //    totalSpent 在事务内原子读取 → 消除 lost-update 竞态条件
     const order = await prisma.$transaction(async (tx) => {
+      // 在事务内读取用户当前 totalSpent（原子性读-改-写）
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { totalSpent: true, membershipLevel: true },
+      });
+
+      if (!user) {
+        throw new Error("用户不存在");
+      }
+
+      const level = getMembershipLevel(user.totalSpent);
+      const discount = getDiscountByLevel(level);
+
+      // 折后金额（保留 2 位小数）
+      const total = Math.round(originalTotal * discount * 100) / 100;
+
       // 创建订单 + 订单明细（价格快照）
       const order = await tx.order.create({
         data: {
@@ -163,19 +171,23 @@ export async function POST() {
           select: { stock: true, name: true },
         });
         if (updated.stock < 0) {
-          throw new Error(`「${updated.name}」库存已被抢光，请重新下单`);
+          throw new StockExhaustedError(updated.name);
         }
       }
 
       // 清空购物车
       await tx.cartItem.deleteMany({ where: { userId } });
 
-      // 更新用户累计消费 + 会员等级
-      const newTotalSpent = currentTotalSpent + total;
-      const newLevel = getMembershipLevel(newTotalSpent);
+      // 原子递增累计消费 + 更新会员等级
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { totalSpent: { increment: total } },
+        select: { totalSpent: true },
+      });
+      const newLevel = getMembershipLevel(updatedUser.totalSpent);
       await tx.user.update({
         where: { id: userId },
-        data: { totalSpent: newTotalSpent, membershipLevel: newLevel },
+        data: { membershipLevel: newLevel },
       });
 
       return order;
@@ -183,7 +195,14 @@ export async function POST() {
 
     return NextResponse.json(order, { status: 201 });
   } catch (error) {
-    console.error("创建订单失败:", error);
+    // 事务内库存被抢光 → 返回具体提示
+    if (error instanceof StockExhaustedError) {
+      return NextResponse.json(
+        { error: `「${error.productName}」库存已被抢光，请重新下单` },
+        { status: 400 }
+      );
+    }
+    console.error("创建订单失败:", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "创建订单失败" }, { status: 500 });
   }
 }

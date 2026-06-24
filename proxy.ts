@@ -4,7 +4,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET!);
+/** 启动时强制校验 JWT_SECRET */
+function getSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "[致命错误] JWT_SECRET 环境变量未设置或长度不足（≥32 字符）。\n" +
+      "请执行: openssl rand -base64 32"
+    );
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const SECRET = getSecret();
 
 // 需要登录的路由前缀
 const AUTH_ROUTES = ["/cart", "/orders", "/api/cart", "/api/orders"];
@@ -44,12 +56,13 @@ export function proxy(req: NextRequest) {
         return NextResponse.redirect(new URL("/", req.url));
       }
 
-      // 认证通过，将用户信息通过 header 传递给下游
-      const res = NextResponse.next();
-      res.headers.set("x-user-id", String(payload.sub));
-      res.headers.set("x-user-email", String(payload.email));
-      res.headers.set("x-user-role", String(payload.role));
-      return res;
+      // 认证通过，将用户信息通过 request header 传递给下游
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set("x-user-id", String(payload.sub));
+      requestHeaders.set("x-user-role", String(payload.role));
+      return NextResponse.next({
+        request: { headers: requestHeaders },
+      });
     },
     () => {
       // JWT 无效或过期

@@ -77,7 +77,7 @@ export async function GET(
 
     return NextResponse.json(order);
   } catch (error) {
-    console.error("获取订单详情失败:", error);
+    console.error("获取订单详情失败:", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "获取订单详情失败" }, { status: 500 });
   }
 }
@@ -97,13 +97,20 @@ export async function PUT(
     return NextResponse.json({ error: "无效的订单 ID" }, { status: 400 });
   }
 
+  // 尽早解析 JSON body，避免 500 误报
+  let body: unknown;
   try {
-    const body = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "请求体必须为有效的 JSON" }, { status: 400 });
+  }
+
+  try {
     const parsed = orderStatusSchema.safeParse(body);
 
     if (!parsed.success) {
       return NextResponse.json(
-        { error: "无效的订单状态", fieldErrors: parsed.error.flatten().fieldErrors },
+        { error: "无效的订单状态" },
         { status: 400 }
       );
     }
@@ -136,9 +143,19 @@ export async function PUT(
       );
     }
 
-    // 取消订单 → 事务：恢复库存 + 退款累计消费 + 更新会员等级
+    // 取消订单 → 事务：条件更新防 TOCTOU + 恢复库存 + 退款累计消费
     if (newStatus === "CANCELLED") {
       await prisma.$transaction(async (tx) => {
+        // 条件更新：仅在非 CANCELLED 时执行，第二并发请求 count=0 直接跳过
+        const updateResult = await tx.order.updateMany({
+          where: { id, status: { not: "CANCELLED" } },
+          data: { status: "CANCELLED" },
+        });
+
+        if (updateResult.count === 0) {
+          throw new Error("ORDER_ALREADY_CANCELLED");
+        }
+
         // 1. 恢复库存
         const items = await tx.orderItem.findMany({
           where: { orderId: id },
@@ -152,30 +169,29 @@ export async function PUT(
           });
         }
 
-        // 2. 退还用户累计消费
-        const currentUser = await tx.user.findUnique({
-          where: { id: order.userId },
-          select: { totalSpent: true },
+        // 2. 事务内重新读取订单金额（避免使用事务外的过期值）
+        const cancelledOrder = await tx.order.findUnique({
+          where: { id },
+          select: { total: true },
         });
 
-        if (currentUser) {
-          const newTotalSpent = Math.max(0, currentUser.totalSpent - order.total);
-          const newLevel = getMembershipLevel(newTotalSpent);
+        // 3. 原子递减累计消费 + 重算会员等级
+        if (cancelledOrder) {
+          const updatedUser = await tx.user.update({
+            where: { id: order.userId },
+            data: { totalSpent: { decrement: cancelledOrder.total } },
+            select: { totalSpent: true },
+          });
+          const safeTotal = Math.max(0, updatedUser.totalSpent);
+          const newLevel = getMembershipLevel(safeTotal);
           await tx.user.update({
             where: { id: order.userId },
-            data: { totalSpent: newTotalSpent, membershipLevel: newLevel },
+            data: { membershipLevel: newLevel },
           });
         }
-
-        // 3. 更新订单状态
-        await tx.order.update({
-          where: { id },
-          data: { status: newStatus },
-        });
       });
     } else {
       // 非取消操作：直接更新状态
-      // 如果是从 PENDING → PAID，不需要累加 totalSpent（已在创建订单时累加）
       await prisma.order.update({
         where: { id },
         data: { status: newStatus },
@@ -198,7 +214,11 @@ export async function PUT(
 
     return NextResponse.json(updated);
   } catch (error) {
-    console.error("更新订单状态失败:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg === "ORDER_ALREADY_CANCELLED") {
+      return NextResponse.json({ error: "订单已被取消，无法重复操作" }, { status: 409 });
+    }
+    console.error("更新订单状态失败:", error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: "更新订单状态失败" }, { status: 500 });
   }
 }

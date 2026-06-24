@@ -3,8 +3,21 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
+import { z } from "zod";
 
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET!);
+/** 启动时强制校验 JWT_SECRET */
+function getSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "[致命错误] JWT_SECRET 环境变量未设置或长度不足（≥32 字符）。\n" +
+      "请执行: openssl rand -base64 32"
+    );
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const SECRET = getSecret();
 
 /** JWT payload 类型（兼容 jose 的 JWTPayload index signature） */
 export interface JwtPayload {
@@ -15,18 +28,31 @@ export interface JwtPayload {
   [key: string]: unknown;
 }
 
-/** 签发 JWT，有效期 24 小时 */
+/** Zod schema 用于运行时校验 JWT 负载结构 */
+const jwtPayloadSchema = z.object({
+  sub: z.string().min(1),
+  email: z.string().email(),
+  name: z.string().min(1),
+  role: z.enum(["USER", "ADMIN"]),
+});
+
+/** 签发 JWT，有效期 4 小时（含 jti 用于未来撤销） */
 export async function signJWT(payload: JwtPayload) {
-  return new SignJWT(payload)
+  return new SignJWT({ ...payload, jti: crypto.randomUUID() })
     .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime("24h")
+    .setExpirationTime("4h")
+    .setIssuedAt()
     .sign(SECRET);
 }
 
-/** 校验 JWT，返回 payload 或抛出异常 */
+/** 校验 JWT 签名 + 结构，返回 payload 或抛出异常 */
 export async function verifyJWT(token: string): Promise<JwtPayload> {
   const { payload } = await jwtVerify(token, SECRET);
-  return payload as unknown as JwtPayload;
+  const parsed = jwtPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error("Invalid token payload structure");
+  }
+  return parsed.data as JwtPayload;
 }
 
 /** 从 cookie 中获取当前登录用户，未登录返回 null */
